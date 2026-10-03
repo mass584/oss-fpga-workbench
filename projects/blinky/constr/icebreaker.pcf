@@ -1,0 +1,5 @@
+# 1BitSquared iCEBreaker - iCE40UP5K-SG48
+set_io -nowarn clk      35   # 12 MHz oscillator
+set_io -nowarn rst_n    10   # user button (active low)
+set_io -nowarn led_n[0] 11   # red LED (active low)
+set_io -nowarn led_n[1] 37   # green LED (active low)

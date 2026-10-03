@@ -1,0 +1,22 @@
+// Sipeed Tang Nano 9K - GW1NR-LV9QN88PC6/I5
+// 27 MHz crystal oscillator
+IO_LOC  "clk" 52;
+IO_PORT "clk" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+
+// Button S2 (active low) - bank 3 is 1.8 V
+IO_LOC  "rst_n" 4;
+IO_PORT "rst_n" IO_TYPE=LVCMOS18 PULL_MODE=UP;
+
+// On-board LEDs (active low) - bank 3 is 1.8 V
+IO_LOC  "led_n[0]" 10;
+IO_PORT "led_n[0]" IO_TYPE=LVCMOS18 PULL_MODE=NONE DRIVE=8;
+IO_LOC  "led_n[1]" 11;
+IO_PORT "led_n[1]" IO_TYPE=LVCMOS18 PULL_MODE=NONE DRIVE=8;
+IO_LOC  "led_n[2]" 13;
+IO_PORT "led_n[2]" IO_TYPE=LVCMOS18 PULL_MODE=NONE DRIVE=8;
+IO_LOC  "led_n[3]" 14;
+IO_PORT "led_n[3]" IO_TYPE=LVCMOS18 PULL_MODE=NONE DRIVE=8;
+IO_LOC  "led_n[4]" 15;
+IO_PORT "led_n[4]" IO_TYPE=LVCMOS18 PULL_MODE=NONE DRIVE=8;
+IO_LOC  "led_n[5]" 16;
+IO_PORT "led_n[5]" IO_TYPE=LVCMOS18 PULL_MODE=NONE DRIVE=8;
