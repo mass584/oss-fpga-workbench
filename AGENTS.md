@@ -41,6 +41,8 @@ openFPGALoader 1.1.1, Icarus Verilog 13.0, Verilator 5.052, Surfer 0.7.0, GTKWav
 
 - バージョン更新は `make update` (= `nix flake update`)。更新後は `make lint sim bitstream` で回帰確認すること。
 - ツール追加は `flake.nix` の `packages` に追記。Homebrew や pip でホストに直接入れないこと。
+- Apicula 0.33 には GW1N-9C で rPLL を 2 個使うと `gowin_pack` が落ちるバグがあり、`nix/apycula-pll-offx.patch` を
+  flake で当てている。Apicula を更新したら、上流で直っていればパッチを外す。
 - 対話シェルは `make shell`、または direnv で `.envrc` (`use flake`) を `direnv allow`。
   シェル内では `FPGA_ENV=nix` が立ち、Makefile は `nix develop` を挟まずに直接ツールを呼ぶ。
 
@@ -53,6 +55,7 @@ mk/arch-<arch>.mk         アーキテクチャ別フロー (gowin, ice40, ecp5)
 boards/<board>.mk         ボード定義: ARCH, DEVICE, FAMILY/PACKAGE, OFL_BOARD, CLK_HZ, LED_COUNT
 projects/<project>/
   project.mk              TOP, RTL_SRCS, TB_TOP, TB_SRCS (パスはプロジェクトディレクトリ相対)
+                          任意: TB_TOPS (複数テストベンチ), LINT_SRCS (lint 専用スタブ), NEXTPNR_FLAGS
   rtl/                    合成対象 RTL
   sim/                    テストベンチ
   constr/<board>.cst|pcf|lpf  ボード別ピン制約 (アーキに応じて拡張子が変わる)
@@ -72,6 +75,10 @@ build/<project>/<board>/  生成物 (git 管理外)。yosys.log / nextpnr.log �
 2. 新アーキテクチャなら `mk/arch-<arch>.mk` を追加し、`synth`/`pnr`/`bitstream` ターゲットと
    `BITSTREAM` 変数を定義する。
 
+ベンダプリミティブ (rPLL, ODDR など) を使うプロジェクトは、Verilator 用にポート宣言だけのスタブを
+`LINT_SRCS` に、シミュレーション用の振る舞いモデルを `TB_SRCS` に入れる (例: `projects/ov7670_hdmi/sim/`)。
+設計の切り替えは `EXTRA_DEFINES=-D...` で行う (変更後は `make clean`)。
+
 ボード情報は `-DCLK_HZ=... -DLED_COUNT=...` として RTL に渡る (lint と合成のみ。シミュレーションは
 テストベンチがパラメータを明示する)。nextpnr のタイミング目標も `CLK_HZ` から自動設定される。
 
@@ -80,13 +87,18 @@ build/<project>/<board>/  生成物 (git 管理外)。yosys.log / nextpnr.log �
 - **Tang Nano 9K** (GW1NR-LV9QN88PC6/I5, `FAMILY=GW1N-9C`): blinky を合成 → SRAM 書き込み → Flash 書き込み
   まで実機確認済み。JTAG idcode `0x100481b`。USB は VID:PID `0403:6010` (BL702 による FT2232 エミュレーション)、
   `/dev/cu.usbserial-*00` が JTAG、`*01` が UART。
+- **ov7670_hdmi** (Tang Nano 9K, OV7670 → HDMI, 内蔵 PSRAM トリプルバッファ): lint / シミュレーション /
+  ビットストリーム生成まで確認、実機未確認。詳細は `projects/ov7670_hdmi/README.md`。
 - **iCEBreaker**: ビルドのみ確認 (実機未確認)。ECP5 フロー (`mk/arch-ecp5.mk`) は未検証のテンプレート。
 
 ## Tang Nano 9K メモ
 
 - 27 MHz クロック: pin 52 (LVCMOS33)。
+- 内蔵 PSRAM は `O_psram_*` / `IO_psram_*` というポート名で自動配置される (cst 不要)。
+- 差動出力 (ELVDS) は cst で p/n を別々に `IO_LOC` する (nextpnr は `71,70` 形式で n 側を配置しない)。
+- GCLK ピン (pin 35 など) からの専用クロック経路を nextpnr が使えないことがある。hold 違反が出たら `DQCE` を挟む。
 - LED ×6: pin 10, 11, 13, 14, 15, 16。**アクティブ Low**、Bank 3 は **1.8 V** (`IO_TYPE=LVCMOS18`)。
-- ボタン S1: pin 3, S2: pin 4。アクティブ Low (`PULL_MODE=UP`)。
+- ボタン S1: pin 4, S2: pin 3 (実機で確認)。アクティブ Low (`PULL_MODE=UP`)。
 - UART (BL702 経由): TX pin 17, RX pin 18 (LVCMOS33)。
 
 ## エージェント向けルール

@@ -1,0 +1,102 @@
+// ---- 基板固定のピン ----
+IO_LOC  "clk27" 52;
+IO_PORT "clk27" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+
+IO_LOC  "btn_rst_n" 4;
+IO_PORT "btn_rst_n" IO_TYPE=LVCMOS18 PULL_MODE=UP;
+
+// S2: Phase 2 では CAM_YUV の彩度の切り替え (top.v)
+IO_LOC  "btn_mark_n" 3;
+IO_PORT "btn_mark_n" IO_TYPE=LVCMOS18 PULL_MODE=UP;
+
+IO_LOC  "led[0]" 10;
+IO_LOC  "led[1]" 11;
+IO_LOC  "led[2]" 13;
+IO_LOC  "led[3]" 14;
+IO_LOC  "led[4]" 15;
+IO_LOC  "led[5]" 16;
+IO_PORT "led[0]" IO_TYPE=LVCMOS18 DRIVE=8;
+IO_PORT "led[1]" IO_TYPE=LVCMOS18 DRIVE=8;
+IO_PORT "led[2]" IO_TYPE=LVCMOS18 DRIVE=8;
+IO_PORT "led[3]" IO_TYPE=LVCMOS18 DRIVE=8;
+IO_PORT "led[4]" IO_TYPE=LVCMOS18 DRIVE=8;
+IO_PORT "led[5]" IO_TYPE=LVCMOS18 DRIVE=8;
+
+// デバッグ UART (BL702 経由で USB シリアル。FPGA の TX)
+IO_LOC  "uart_tx" 17;
+IO_PORT "uart_tx" IO_TYPE=LVCMOS33;
+
+// HDMI (ELVDS_OBUF)
+//   Gowin EDA は p 側に "71,70" のように 2 ピン書けるが、nextpnr-himbaechel は
+//   この形式で n 側を自動配置しないので p/n を別々に指定する
+IO_LOC  "tmds_clk_p" 69;
+IO_LOC  "tmds_clk_n" 68;
+IO_PORT "tmds_clk_p" PULL_MODE=NONE DRIVE=3.5;
+IO_LOC  "tmds_d_p[0]" 71;
+IO_LOC  "tmds_d_n[0]" 70;
+IO_PORT "tmds_d_p[0]" PULL_MODE=NONE DRIVE=3.5;
+IO_LOC  "tmds_d_p[1]" 73;
+IO_LOC  "tmds_d_n[1]" 72;
+IO_PORT "tmds_d_p[1]" PULL_MODE=NONE DRIVE=3.5;
+IO_LOC  "tmds_d_p[2]" 75;
+IO_LOC  "tmds_d_n[2]" 74;
+IO_PORT "tmds_d_p[2]" PULL_MODE=NONE DRIVE=3.5;
+
+// 内蔵 PSRAM (O_psram_* / IO_psram_*) はポート名で内部ピンに自動配置されるので指定不要
+
+// ---- OV7670 (すべて Bank2 = 3.3V) ----
+// 左側ヘッダの上から順に、カメラ配線図 (Papilio 版) と同じ並びで 14 本が連続する:
+//   38:XCLK  37:SIO-D  36:SIO-C  39:D7  25:D6  26:D5  27:D4  28:D3  29:D2  30:D1
+//   33:D0  34:HREF  40:VSYNC  35:PCLK  41:GND ガード  42:RESET
+// XCLK は元は 41 (PCLK の隣) だったが、XCLK のクロストークで PCLK のエッジを数え間違えるのを
+// 避けるため 38 (PWDN の位置) と入れ替えた。カメラの PWDN は GND に直結する。
+// 空いた 41 は常に Low を出し、PCLK の線に沿わせてカメラ側の GND につなぐガード線にする
+// PCLK は GCLKT_4 (pin 35)。PWDN/RESET はブレッドボードで固定しているなら未接続でよい。
+// 注意: 33,34,35,40,41,42 は RGB LCD コネクタ、36〜39 は TF カードと共用。
+//       LCD は外し、TF カードは挿さないこと。
+IO_LOC "cam_pwdn"    41;   // 常に Low。PCLK (35) の隣を通す疑似 GND (ガード線) として使う
+IO_LOC "cam_siod"    37;
+IO_LOC "cam_sioc"    36;
+IO_LOC "cam_d[7]"    39;
+IO_LOC "cam_d[6]"    25;
+IO_LOC "cam_d[5]"    26;
+IO_LOC "cam_d[4]"    27;
+IO_LOC "cam_d[3]"    28;
+IO_LOC "cam_d[2]"    29;
+IO_LOC "cam_d[1]"    30;
+IO_LOC "cam_d[0]"    33;
+IO_LOC "cam_href"    34;
+IO_LOC "cam_vsync"   40;
+IO_LOC "cam_pclk"    35;   // IOB29A / GCLKT_4
+IO_LOC "cam_xclk"    38;   // PCLK (35) の隣から離すため、ヘッダの反対端の 38 に移した
+IO_LOC "cam_reset_n" 42;
+
+// ヒステリシスは付けない (2026-10-04 実機, cam_probe で測定)。PCLK の波形の振幅がピンで足りず:
+//   HYSTERESIS=HIGH: 余分な立ち上がりは 0 になったが、Low が短くなり取りこぼしが増えた
+//   HYSTERESIS=L2H (PCLK のみ): High に届かずエッジの約半分を取りこぼした
+// 2026-10-05: GND 線を追加 (本物の GND + pin 41 のガード線を PCLK に沿わせる) したら取りこぼしが 0 に
+//   なり、余分な立ち上がりだけが残った。PCLK だけ HYSTERESIS=HIGH を付けたところ、XCLK を 38 に
+//   移した構成ではカメラが止まった (書き換えを交互にして再現。ヒステリシスなしでは動く)。
+//   Apicula が pin 35 の属性を書くときに 38 の設定を壊していると思われるので、付けない
+IO_PORT "cam_pclk"    IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_PORT "cam_vsync"   IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_PORT "cam_href"    IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_PORT "cam_d[0]"    IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_PORT "cam_d[1]"    IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_PORT "cam_d[2]"    IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_PORT "cam_d[3]"    IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_PORT "cam_d[4]"    IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_PORT "cam_d[5]"    IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_PORT "cam_d[6]"    IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_PORT "cam_d[7]"    IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_PORT "cam_xclk"    IO_TYPE=LVCMOS33 DRIVE=8;
+IO_PORT "cam_reset_n" IO_TYPE=LVCMOS33;
+IO_PORT "cam_pwdn"    IO_TYPE=LVCMOS33 DRIVE=24;   // ガード線なので Low を最大駆動で出す
+IO_PORT "cam_sioc"    IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_PORT "cam_siod"    IO_TYPE=LVCMOS33 PULL_MODE=UP;
+
+// ---- BME280 (I2C, オープンドレイン)。SDO=GND でアドレス 0x76、CSB は 3.3V (I2C モード)
+IO_LOC  "env_sda" 48;
+IO_LOC  "env_scl" 49;
+IO_PORT "env_sda" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_PORT "env_scl" IO_TYPE=LVCMOS33 PULL_MODE=UP;

@@ -1,0 +1,20 @@
+--- a/apycula/gowin_pack.py
++++ b/apycula/gowin_pack.py
+@@ -4981,6 +4981,8 @@
+         """ PLL can occupy several cells """
+         if bel.x > 27:
+             offx = -1
++        else:
++            offx = 1
+         for off in range(4):
+             yield (bel.x + offx * off, bel.y)
+ 
+@@ -5119,6 +5121,8 @@
+         """ PLL can occupy several cells """
+         if bel.x > 27:
+             offx = -1
++        else:
++            offx = 1
+         for off in range(4):
+             yield (bel.x + offx * off, bel.y)
+ 

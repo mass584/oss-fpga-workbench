@@ -28,14 +28,21 @@ endif
 # ------------------------------------------------- board / project / arch flow
 include $(ROOT)/boards/$(BOARD).mk
 include $(PROJDIR)/project.mk
-include $(ROOT)/mk/arch-$(ARCH).mk
 
 # Project files are relative to the project directory.
-RTL := $(addprefix $(PROJDIR)/,$(RTL_SRCS))
-TB  := $(addprefix $(PROJDIR)/,$(TB_SRCS))
+# Defined before the arch flow is included: its rules use $(RTL) as prerequisites.
+RTL  := $(addprefix $(PROJDIR)/,$(RTL_SRCS))
+TB   := $(addprefix $(PROJDIR)/,$(TB_SRCS))
+# Optional: extra files for lint only (e.g. black-box stubs of vendor primitives).
+LINT := $(addprefix $(PROJDIR)/,$(LINT_SRCS))
+# Optional: several self-checking testbenches (default: just TB_TOP).
+TB_TOPS ?= $(TB_TOP)
+
+include $(ROOT)/mk/arch-$(ARCH).mk
 
 # Board facts exposed to RTL as `defines (designs fall back to their own defaults).
-DEFINES := -DCLK_HZ=$(CLK_HZ) $(if $(LED_COUNT),-DLED_COUNT=$(LED_COUNT))
+# EXTRA_DEFINES selects design variants, e.g. EXTRA_DEFINES=-DFB_PHASE1 (run `make clean` after changing it).
+DEFINES := -DCLK_HZ=$(CLK_HZ) $(if $(LED_COUNT),-DLED_COUNT=$(LED_COUNT)) $(EXTRA_DEFINES)
 # Timing target for nextpnr, derived from the board clock.
 CLK_MHZ := $(shell awk 'BEGIN { print $(CLK_HZ) / 1000000 }')
 
@@ -54,7 +61,7 @@ help:
 	@echo "  shell      open a shell with all tools (or use direnv: .envrc)"
 	@echo "  update     update flake.lock (bump all tool versions)"
 	@echo "  lint       Verilator lint of RTL"
-	@echo "  sim        Icarus Verilog self-checking testbench -> VCD"
+	@echo "  sim        Icarus Verilog self-checking testbench(es) -> VCD (TB_TOPS=$(TB_TOPS))"
 	@echo "  wave       open VCD in WAVE_VIEWER (surfer|gtkwave, now: $(WAVE_VIEWER))"
 	@echo "  synth/pnr/bitstream   build steps ($(ARCH) flow)"
 	@echo "  detect     detect the FPGA over JTAG"
@@ -94,16 +101,22 @@ update: nix-check
 
 # ------------------------------------------------------------- verification
 lint:
-	$(RUN) verilator --lint-only -Wall $(DEFINES) --top-module $(TOP) $(RTL)
+	$(RUN) verilator --lint-only -Wall $(DEFINES) --top-module $(TOP) $(RTL) $(LINT)
 
-sim: $(BUILD)/sim/$(TB_TOP).vcd
+sim: $(foreach t,$(TB_TOPS),$(BUILD)/sim/$(t).vcd)
 
-$(BUILD)/sim/$(TB_TOP).vvp: $(RTL) $(TB)
+# Include files (*.vh) are searched in the source directories.
+INC := $(sort $(dir $(RTL) $(TB)))
+
+$(BUILD)/sim/%.vvp: $(RTL) $(TB) $(wildcard $(addsuffix *.vh,$(INC)))
 	@mkdir -p $(dir $@)
-	$(RUN) iverilog -g2012 -Wall -s $(TB_TOP) -o $@ $^
+	$(RUN) iverilog -g2012 -Wall $(addprefix -I,$(INC)) -s $* -o $@ $(RTL) $(TB)
+
+# Keep the compiled simulation (pattern-rule intermediate) for re-runs.
+.PRECIOUS: $(BUILD)/sim/%.vvp
 
 # The testbench calls $fatal on failure, which makes vvp exit non-zero.
-$(BUILD)/sim/$(TB_TOP).vcd: $(BUILD)/sim/$(TB_TOP).vvp
+$(BUILD)/sim/%.vcd: $(BUILD)/sim/%.vvp
 	$(RUN) vvp -n $< +vcd=$@
 
 wave: $(BUILD)/sim/$(TB_TOP).vcd
