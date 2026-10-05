@@ -1,9 +1,16 @@
 // ============================================================================
-// 単体テスト (Phase 1 から流用したモジュールの回帰確認 + キャプチャ改修の確認)
-//   tb_tmds    : TMDS エンコード -> デコード往復一致、制御トークン、DC バランス
-//   tb_sccb    : SCCB 波形をモニタして書き込みをデコードし、レジスタ表と一致すること
-//   tb_capture : cam_capture の書き込みアドレス/データ/SOF (DECIMATE=0/1 両方)、
-//                途中で打ち切られたフレームの次フレームで先頭から書き直すこと
+// 単体テスト
+//   tb_tmds     : TMDS エンコード -> デコード往復一致、制御トークン、DC バランス
+//   tb_sccb     : SCCB 波形をモニタして書き込みをデコードし、レジスタ表と一致すること
+//   tb_capture  : cam_capture の書き込みアドレス/データ/SOF、
+//                 途中で打ち切られたフレームの次フレームで先頭から書き直すこと
+//   tb_dbg      : dbg_report の UART 出力がテンプレートどおりになること
+//   tb_probe    : cam_probe の異常検出・集計
+//   tb_csync    : cam_sync がグリッチ入りの PCLK で立ち上がりを 1 回ずつ数えること
+//   tb_yuv      : yuv2rgb が BT.601 の式と ±1 以内で一致すること (彩度 x1.0 / x2.0)
+//   tb_calc     : env_calc (BME280 の補正計算) が tools/env_asm.py の参照実装と一致すること
+//   tb_env      : bme280_env + BME280 モデル (I2C) の通し試験 / tb_env_nack: センサが応答しない場合
+//   tb_overlay  : text_overlay の 1 フレームの全画素 (映像の遅れ 1 / 4 クロック)
 // ============================================================================
 `timescale 1ps / 1ps
 `default_nettype none
@@ -186,18 +193,14 @@ module tb_capture;
         .pclk(pclk), .vsync(vsync), .href(href), .d(d), .frame_id(fid), .frames_sent(frames)
     );
 
-    wire        we_f, sof_f, ft_f, we_d, sof_d, ft_d;
+    wire        we_f, sof_f, ft_f;
     wire [18:0] addr_f;
-    wire [14:0] addr_d;
-    wire [15:0] data_f, data_d;
-    cam_capture #(.DECIMATE(0), .AW(19)) cap_full (
+    wire [15:0] data_f;
+    cam_capture #(.AW(19)) cap_full (
         .pclk(pclk), .ce(1'b1), .vsync(vsync), .href(href), .d(d),
         .we(we_f), .waddr(addr_f), .wdata(data_f), .sof(sof_f), .frame_toggle(ft_f));
-    cam_capture #(.DECIMATE(1), .AW(15)) cap_dec (
-        .pclk(pclk), .ce(1'b1), .vsync(vsync), .href(href), .d(d),
-        .we(we_d), .waddr(addr_d), .wdata(data_d), .sof(sof_d), .frame_toggle(ft_d));
 
-    integer errs = 0, n_f = 0, n_d = 0, exp_f = 0, exp_d = 0, fr = 0;
+    integer errs = 0, n_f = 0, exp_f = 0, fr = 0;
     reg [3:0] cur_fid = 0;
     reg [9:0] ex; reg [8:0] ey;
 
@@ -207,12 +210,12 @@ module tb_capture;
         ft_prev = ft_f;
         if (fr >= 1) begin
             // 打ち切りフレーム (fr==2 で終わるもの = モデルの frame 1) は 100 ライン分
-            if (n_f != ((fr == 2) ? 640 * 100 : 640 * 480) || n_d != ((fr == 2) ? 160 * 25 : 160 * 120)) begin
+            if (n_f != ((fr == 2) ? 640 * 100 : 640 * 480)) begin
                 errs = errs + 1;
-                $display("tb_capture: frame %0d: full=%0d dec=%0d pixels", fr - 1, n_f, n_d);
+                $display("tb_capture: frame %0d: %0d pixels", fr - 1, n_f);
             end
         end
-        fr = fr + 1; n_f = 0; n_d = 0; exp_f = 0; exp_d = 0;
+        fr = fr + 1; n_f = 0; exp_f = 0;
     end
 
     always @(posedge pclk) begin
@@ -224,14 +227,6 @@ module tb_capture;
                 if (errs < 5) $display("tb_capture: full #%0d addr %0d data %h sof %b", n_f, addr_f, data_f, sof_f);
             end
             n_f = n_f + 1; exp_f = exp_f + 1;
-        end
-        if (we_d) begin
-            ex = (exp_d % 160) * 4; ey = (exp_d / 160) * 4;
-            if (addr_d !== exp_d[14:0] || data_d !== cam_pat(ex, ey, cur_fid) || sof_d !== (n_d == 0)) begin
-                errs = errs + 1;
-                if (errs < 5) $display("tb_capture: dec #%0d addr %0d data %h sof %b", n_d, addr_d, data_d, sof_d);
-            end
-            n_d = n_d + 1; exp_d = exp_d + 1;
         end
     end
 
@@ -366,7 +361,7 @@ module tb_csync;
     wire       ce, vs_o, hr_o, pclk_s;
     wire [7:0] d_o;
     wire [1:0] pair;
-    cam_sync dut (.clk(clk), .dsel(2'd0), .pclk(pclk), .vsync(1'b0), .href(1'b1), .d(d),
+    cam_sync dut (.clk(clk), .pclk(pclk), .vsync(1'b0), .href(1'b1), .d(d),
                   .ce(ce), .vsync_o(vs_o), .href_o(hr_o), .d_o(d_o), .pclk_s(pclk_s), .pclk_pair(pair));
 
     integer n_ce = 0, errs = 0, k;

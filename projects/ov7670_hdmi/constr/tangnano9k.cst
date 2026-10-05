@@ -5,9 +5,9 @@ IO_PORT "clk27" IO_TYPE=LVCMOS33 PULL_MODE=UP;
 IO_LOC  "btn_rst_n" 4;
 IO_PORT "btn_rst_n" IO_TYPE=LVCMOS18 PULL_MODE=UP;
 
-// S2: Phase 2 では CAM_YUV の彩度の切り替え (top.v)
-IO_LOC  "btn_mark_n" 3;
-IO_PORT "btn_mark_n" IO_TYPE=LVCMOS18 PULL_MODE=UP;
+// S2: CAM_YUV の彩度の切り替え (top.v)
+IO_LOC  "btn_s2_n" 3;
+IO_PORT "btn_s2_n" IO_TYPE=LVCMOS18 PULL_MODE=UP;
 
 IO_LOC  "led[0]" 10;
 IO_LOC  "led[1]" 11;

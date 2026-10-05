@@ -2,11 +2,8 @@
 // カメラ信号のオーバーサンプリング (システムクロックドメインへ取り込む)
 //   PCLK をクロックとして使わず、PCLK/VSYNC/HREF/D を IDDR で clk の両エッジでサンプルし
 //   (実効 2 x clk)、さらに 2FF で同期する。サンプル列の中で PCLK が 0->1 になった位置を
-//   見つけたサイクルで ce=1 を出し、立ち上がりのサンプルから dsel で選んだ位置の vsync/href/d を
-//   出力する (dsel 0:そのサンプル 1:+1 2:+2 3:-1 サンプル, 1 サンプル = 11ns)。
-//   実機 (ブレッドボード) では、立ち上がり直後 (0) だと多くのビットが同時に変わる画素で化けて
-//   なだらかな面に等高線状の色の点が出、+2 (約 22ns 後) ではほぼ全面が化けた。データの切り替わりが
-//   配線の遅れで立ち上がりの後ろにずれ込んでいると考えられるので、実行中に選べるようにしてある
+//   見つけたサイクルで ce=1 を出し、その立ち上がりのサンプルの vsync/href/d を出力する。
+//   (実機で立ち上がりの 1 サンプル前・1〜2 サンプル後も試したが、このサンプルが最良だった)
 //
 //   立ち上がり = Low (1 サンプル以上) の直後に High が 2 サンプル以上続く位置。ただし前の立ち上がり
 //   から HOLD サンプル以内のものは捨てる (ホールドオフ)。
@@ -29,7 +26,6 @@ module cam_sync #(
     parameter [3:0] HOLD = 4'd5   // ホールドオフ [サンプル]。PCLK の周期 (サンプル数) より短くする。0 で無効
 )(
     input  wire       clk,
-    input  wire [1:0] dsel,       // データを取るサンプル位置 (上記)
     input  wire       pclk,       // 非同期 (ピン)
     input  wire       vsync,      // 非同期 (ピン)
     input  wire       href,       // 非同期 (ピン)
@@ -55,10 +51,9 @@ module cam_sync #(
     // さらに 1 サイクル分を残し、サンプル列 ... pp1, c0, c1, b0, b1 (古い順) で判定する
     reg [10:0] a0, a1, b0, b1, c0, c1;
     reg        pp1;         // 前サイクルの c1
-    reg [9:0]  pd1;         // 同 データ (dsel=3 で c0 の 1 サンプル前として使う)
     reg [3:0]  sc;          // 前の立ち上がりのサンプルから pp1 までのサンプル数 (13 で飽和。sc+2 があふれない)
     initial begin
-        a0 = 0; a1 = 0; b0 = 0; b1 = 0; c0 = 0; c1 = 0; pp1 = 1'b0; pd1 = 0; sc = 4'd13;
+        a0 = 0; a1 = 0; b0 = 0; b1 = 0; c0 = 0; c1 = 0; pp1 = 1'b0; sc = 4'd13;
         ce = 1'b0; vsync_o = 1'b0; href_o = 1'b0; d_o = 0;
     end
 
@@ -84,25 +79,14 @@ module cam_sync #(
         b0 <= a0;  b1 <= a1;
         c0 <= b0;  c1 <= b1;
         pp1 <= c1[10];
-        pd1 <= c1[9:0];
         sc  <= rise0 ? 4'd1 : rise1 ? 4'd0 : (sc >= 4'd11) ? 4'd13 : sc + 4'd2;
         ce  <= 1'b0;
         if (rise0) begin
             ce <= 1'b1;
-            case (dsel)
-                2'd0: {vsync_o, href_o, d_o} <= c0[9:0];
-                2'd1: {vsync_o, href_o, d_o} <= c1[9:0];
-                2'd2: {vsync_o, href_o, d_o} <= b0[9:0];
-                default: {vsync_o, href_o, d_o} <= pd1;
-            endcase
+            {vsync_o, href_o, d_o} <= c0[9:0];
         end else if (rise1) begin
             ce <= 1'b1;
-            case (dsel)
-                2'd0: {vsync_o, href_o, d_o} <= c1[9:0];
-                2'd1: {vsync_o, href_o, d_o} <= b0[9:0];
-                2'd2: {vsync_o, href_o, d_o} <= b1[9:0];
-                default: {vsync_o, href_o, d_o} <= c0[9:0];
-            endcase
+            {vsync_o, href_o, d_o} <= c1[9:0];
         end
     end
 endmodule

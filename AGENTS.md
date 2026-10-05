@@ -87,8 +87,9 @@ build/<project>/<board>/  生成物 (git 管理外)。yosys.log / nextpnr.log �
 - **Tang Nano 9K** (GW1NR-LV9QN88PC6/I5, `FAMILY=GW1N-9C`): blinky を合成 → SRAM 書き込み → Flash 書き込み
   まで実機確認済み。JTAG idcode `0x100481b`。USB は VID:PID `0403:6010` (BL702 による FT2232 エミュレーション)、
   `/dev/cu.usbserial-*00` が JTAG、`*01` が UART。
-- **ov7670_hdmi** (Tang Nano 9K, OV7670 → HDMI, 内蔵 PSRAM トリプルバッファ): lint / シミュレーション /
-  ビットストリーム生成まで確認、実機未確認。詳細は `projects/ov7670_hdmi/README.md`。
+- **ov7670_hdmi** (Tang Nano 9K, OV7670 → HDMI, 内蔵 PSRAM トリプルバッファ + BME280 の温度・湿度・気圧表示):
+  実機で動作確認済み (RGB565 15fps、YUV 7.5fps)。カメラはブレッドボード配線で、PCLK のグリッチをロジックで
+  吸収している (基板化が課題)。Flash には RGB565 版を書き込み済み。詳細は `projects/ov7670_hdmi/README.md`。
 - **iCEBreaker**: ビルドのみ確認 (実機未確認)。ECP5 フロー (`mk/arch-ecp5.mk`) は未検証のテンプレート。
 
 ## Tang Nano 9K メモ
@@ -96,10 +97,24 @@ build/<project>/<board>/  生成物 (git 管理外)。yosys.log / nextpnr.log �
 - 27 MHz クロック: pin 52 (LVCMOS33)。
 - 内蔵 PSRAM は `O_psram_*` / `IO_psram_*` というポート名で自動配置される (cst 不要)。
 - 差動出力 (ELVDS) は cst で p/n を別々に `IO_LOC` する (nextpnr は `71,70` 形式で n 側を配置しない)。
-- GCLK ピン (pin 35 など) からの専用クロック経路を nextpnr が使えないことがある。hold 違反が出たら `DQCE` を挟む。
+- GCLK ピン (pin 35 など) からの専用クロック経路を nextpnr が使えないことがある。外部から来るクロック
+  (カメラの PCLK など) は、クロックとして使わず内部クロックでオーバーサンプルするのが確実
+  (`DQCE` を挟む方法は hold 違反は消えたが実機で動かなかった)。
+- `make prog` (SRAM) の内容は電源を切ると消え、Flash の回路で起動する。ピンの役割を変えた回路を試すときは、
+  Flash 側の回路でそのピンが出力になっていないか (配線とぶつからないか) に注意する。
 - LED ×6: pin 10, 11, 13, 14, 15, 16。**アクティブ Low**、Bank 3 は **1.8 V** (`IO_TYPE=LVCMOS18`)。
 - ボタン S1: pin 4, S2: pin 3 (実機で確認)。アクティブ Low (`PULL_MODE=UP`)。
 - UART (BL702 経由): TX pin 17, RX pin 18 (LVCMOS33)。
+- リソースは LUT4 と ALU の合計で見る (ALU も LUT の場所を使う)。合計が 8640 に近いと nextpnr の
+  配置が「配置できない」で止まる。
+
+### Apicula 0.33 の制約 (OSS フローで避けること)
+
+- `*` の乗算は Yosys が DSP (MULT9X9 など) に割り当て、`gowin_pack` がその属性を扱えず落ちる。
+  乗算はシフト加算か逐次処理で書く。
+- 入力の `HYSTERESIS` を付けると、別のピンの設定まで壊れることがあった (ov7670_hdmi の pin 35 / 38)。
+- BSRAM に置いた ROM のアドレス入力で nextpnr がホールド違反を出すことがある。小さい ROM は LUT に置く
+  (`(* ram_style = "logic" *)`)。
 
 ## エージェント向けルール
 

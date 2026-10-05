@@ -41,7 +41,6 @@ module psram_ctrl #(
     // CK の作り方: 0 = clk_p (PLL の位相シフト出力, 既定 90°) で作る。実機で CA/読み出しが通るのを確認済み
     //              1 = clk の反転 (180°)。実機ではデバイスが応答しなかった (切り分け用に残す)
     parameter integer CK_MODE  = 0,
-    parameter integer DBG_GAP  = 11,           // dbg_word / dbg_rwtrace を記録する gap 候補
     // 調整で比較するビット。実機 (OSS フロー) では各バイトの bit7 が書き込めないので除外する
     parameter [31:0]  CAL_MASK = 32'h7F7F7F7F,
     // 1: 初期化で CR0 を書く。実機では CR0 の書き込み結果が不正 (0x8FEF -> 0x8F8F) だったので
@@ -54,7 +53,7 @@ module psram_ctrl #(
 
     output reg         init_done,      // 調整成功。以後 req を受け付ける
     output reg         init_fail,      // 1 回以上調整に失敗した (成功するまでやり直す)
-    output reg  [3:0]  wr_gap,         // 採用した書き込み gap (デバッグ用)
+    output reg  [3:0]  wr_gap,         // 採用した書き込み gap (状態表示用)
 
     // ユーザ側 (clk ドメイン)
     output wire        ready,          // req を受け付けられる
@@ -67,18 +66,6 @@ module psram_ctrl #(
     output reg  [31:0] rd_data,
     output reg         xfer_done,      // トランザクション終了 (CS# High にした)
     output reg         rd_err,         // 読み出しで RWDS が見つからなかった/欠けた
-
-    // 調整のデバッグ情報 (最後の調整ラウンドの結果)
-    output reg  [7:0]  dbg_attempts,   // 調整ラウンド数 (飽和)
-    output reg  [8*(G_MAX-G_MIN+1)-1:0] dbg_res,  // 候補ごと {RWDS検出, 位相, 一致ワード数[5:0]}、左が G_MIN
-    output reg  [63:0] dbg_rwtrace,    // G_MIN 候補の読み出しで n=0..31 の RWDS {q0,q1} (左が古い)
-    output reg  [31:0] dbg_word,       // DBG_GAP 候補の読み出しで最初に取り出したワード
-    output reg  [31:0] dbg_word2,      // 同 2 番目のワード
-    output reg  [63:0] dbg_q7,         // 同読み出しのワードごとの不一致 (bit i = ワード i) と最初の不一致ワード番号
-    output reg  [63:0] dbg_q15,        // 同 最初の不一致ワード {期待値, 読み値}
-    output reg  [31:0] dbg_id0,        // レジスタ ID0 (各ダイ 16bit: {ダイ1上位,ダイ0上位,ダイ1下位,ダイ0下位})
-    output reg  [31:0] dbg_cr0a,       // CR0 (書き込み前)
-    output reg  [31:0] dbg_cr0b,       // CR0 (書き込み後)
 
     // PSRAM (GW1NR-9C 内部ピン。ポート名で自動配置される)
     output wire [1:0]  O_psram_ck,
@@ -111,9 +98,6 @@ module psram_ctrl #(
     reg [15:0] tmr;
     reg [3:0]  cand;            // 調整中の gap 候補
     reg        cal_ok;
-    reg [5:0]  cal_match;       // 期待値と一致したワード数
-    reg        cal_found, cal_ph;
-    reg [1:0]  rr_sel;          // レジスタ読み出しの格納先 0:ID0 1:CR0前 2:CR0後
     reg        rst_n_r;
 
     assign ready = (st == ST_IDLE);
@@ -229,9 +213,6 @@ module psram_ctrl #(
             op <= OP_RD; t_addr <= 21'd0; t_gap <= 4'd0; t_user <= 1'b0; n <= 8'd0;
             cand <= G_MIN[3:0]; cal_ok <= 1'b0;
             init_done <= 1'b0; init_fail <= 1'b0; wr_gap <= 4'd0;
-            dbg_attempts <= 8'd0; dbg_res <= 0; dbg_rwtrace <= 64'd0; dbg_word <= 32'd0;
-            dbg_word2 <= 32'd0; dbg_q7 <= 64'd0; dbg_q15 <= 64'd0; dbg_id0 <= 32'd0; dbg_cr0a <= 32'd0; dbg_cr0b <= 32'd0; rr_sel <= 2'd0;
-            cal_match <= 6'd0; cal_found <= 1'b0; cal_ph <= 1'b0;
             rs <= RS_DONE; rphase <= 1'b0; widx <= 6'd0; lowrun <= 2'd0;
             o_cs0 <= 1'b1; o_cs1 <= 1'b1; o_dq0 <= 16'd0; o_dq1 <= 16'd0;
             o_dqoe <= 1'b0; o_rwoe <= 1'b0; o_ck <= 1'b0; o_rwm0 <= 1'b1; o_rwm1 <= 1'b1;
@@ -249,25 +230,23 @@ module psram_ctrl #(
                 tmr <= tmr + 1'b1;
                 if (tmr == T_INIT[15:0]) begin tmr <= 16'd0; st <= ST_ID; end
             end
-            // デバッグ: ID0 と CR0 (書き込み前) を読む
-            ST_ID:  begin rr_sel <= 2'd0; start_xfer(OP_RRD, 21'h000000, 4'd0, 1'b0, ST_CRA); end
-            ST_CRA: begin rr_sel <= 2'd1; start_xfer(OP_RRD, 21'h000800, 4'd0, 1'b0, ST_CFG); end
-            ST_CRB: begin rr_sel <= 2'd2; start_xfer(OP_RRD, 21'h000800, 4'd0, 1'b0, ST_CAL_W); end
+            // ID0 と CR0 を読む (値は使わない)。立ち上げ時のデバッグ用だったが、実機で調整が通っている
+            // 初期化の手順を変えないために読み出しのトランザクションだけ残している
+            ST_ID:  start_xfer(OP_RRD, 21'h000000, 4'd0, 1'b0, ST_CRA);
+            ST_CRA: start_xfer(OP_RRD, 21'h000800, 4'd0, 1'b0, ST_CFG);
+            ST_CRB: start_xfer(OP_RRD, 21'h000800, 4'd0, 1'b0, ST_CAL_W);
             // CR0 書き込み (レジスタ空間 0x800, レイテンシなし)
             ST_CFG: begin
                 cand <= G_MIN[3:0];
-                if (dbg_attempts != 8'hFF) dbg_attempts <= dbg_attempts + 1'b1;
                 if (WRITE_CR0 != 0) start_xfer(OP_REG, 21'h000800, 4'd0, 1'b0, ST_CRB);
                 else                st <= ST_CRB;
             end
             ST_CAL_W: start_xfer(OP_WR, CAL_ADDR, cand, 1'b0, ST_CAL_R);
             ST_CAL_R: begin
                 cal_ok <= 1'b1;
-                cal_match <= 6'd0; cal_found <= 1'b0; cal_ph <= 1'b0;
                 start_xfer(OP_RD, CAL_ADDR, cand, 1'b0, ST_CAL_CHK);
             end
             ST_CAL_CHK: begin
-                dbg_res[{G_MAX[3:0] - cand, 3'b000} +: 8] <= {cal_found, cal_ph, cal_match};
                 if (cal_ok) begin
                     wr_gap    <= cand;
                     init_done <= 1'b1;
@@ -369,37 +348,8 @@ module psram_ctrl #(
                 if (t_user) begin
                     rd_valid <= 1'b1;
                     rd_data  <= cap_word;
-                end else if (op == OP_RRD) begin
-                    if (rs == RS_FIND) begin
-                        case (rr_sel)
-                            2'd0:    dbg_id0  <= cap_word;
-                            2'd1:    dbg_cr0a <= cap_word;
-                            default: dbg_cr0b <= cap_word;
-                        endcase
-                    end
-                end else begin
+                end else if (op != OP_RRD) begin
                     if (((cap_word ^ cal_pat(cap_idx, t_gap)) & CAL_MASK) != 32'd0) cal_ok <= 1'b0;
-                    else                                     cal_match <= cal_match + 1'b1;
-                    if (rs == RS_CAP && widx == 6'd1 && t_gap == DBG_GAP[3:0]) dbg_word2 <= cap_word;
-                    if (rs == RS_FIND) begin
-                        cal_found <= 1'b1;
-                        cal_ph    <= !p_rw0;
-                        if (t_gap == DBG_GAP[3:0]) dbg_word <= cap_word;
-                    end
-                end
-            end
-            // RWDS の様子を記録 (調整の最初の候補の読み出しだけ)
-            if (st == ST_XFER && op == OP_RD && !t_user && t_gap == DBG_GAP[3:0] && n < 8'd32)
-                dbg_rwtrace <= {dbg_rwtrace[61:0], c_rw0, c_rw1};
-            if (st == ST_CAL_R && cand == DBG_GAP[3:0]) begin
-                dbg_q7 <= 64'd0; dbg_q15 <= 64'd0;
-            end
-            if (cap_fire && !(rs == RS_CAP && widx == BL[5:0]) && !t_user && op == OP_RD && t_gap == DBG_GAP[3:0] &&
-                (((cap_word ^ cal_pat(cap_idx, t_gap)) & CAL_MASK) != 32'd0)) begin
-                dbg_q7[{1'b0, cap_idx}] <= 1'b1;
-                if (dbg_q7[31:0] == 32'd0) begin
-                    dbg_q7[39:32] <= {3'd0, cap_idx};
-                    dbg_q15 <= {cal_pat(cap_idx, t_gap), cap_word};
                 end
             end
             if (err_fire) begin

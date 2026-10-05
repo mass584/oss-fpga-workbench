@@ -1,18 +1,15 @@
 // ============================================================================
-// OV7670 ストリーム取り込み (VGA RGB565, 2byte/pixel)
-//   PCLK 立ち上がりでサンプル。HREF=1 の間 [R5 G3][G3 B5] の順で来る
-//   DECIMATE=1 (Phase 1): 横・縦とも4画素に1つを採用して 160x120 としてバッファへ書く
-//                         waddr = (y/4)*160 + x/4  (AW=15)
-//   DECIMATE=0 (Phase 2): 640x480 全画素を出力する。waddr = y*640 + x (AW=19)
+// OV7670 ストリーム取り込み (VGA, 2byte/pixel: RGB565 または YUV422)
+//   PCLK 立ち上がりでサンプル。HREF=1 の間 2 バイトで 1 画素 ({先, 後} を wdata に)
+//   640x480 全画素を出力する。waddr = y*640 + x (PSRAM への書き込みは sof で頭出しして順に書くので
+//   上位では使わない。単体テストで並び順を確かめるために出している)
 //   sof は「フレームの最初に出力する画素」に we と同時に立つ (VSYNC 後の最初の画素)
-//   DECIMATE=0 では、640 画素に足りないラインは HREF 終了後に残りを 0 で埋める
-//   ce: PCLK 立ち上がり相当のサイクルだけ 1 (Phase 1 は PCLK で動かして ce=1 固定、
-//       Phase 2 はシステムクロックでオーバーサンプルして cam_sync の ce を入れる)。
+//   640 画素に足りないラインは HREF 終了後に残りを 0 で埋める
+//   ce: PCLK 立ち上がり相当のサイクルだけ 1 (cam_sync がシステムクロックでオーバーサンプルして作る)。
 //       出力 (we/sof/wdata など) は次の ce まで保持される
 // ============================================================================
 module cam_capture #(
-    parameter DECIMATE = 1,
-    parameter AW       = 15
+    parameter AW = 19
 )(
     input  wire          pclk,
     input  wire          ce,
@@ -26,7 +23,7 @@ module cam_capture #(
     output reg           frame_toggle
 );
     // 入力を一段叩いてタイミングを揃える (IOB レジスタに入る)
-    reg       vsync_r, vsync_r2, href_r, href_r2;
+    reg       vsync_r, vsync_r2, href_r;
     reg [7:0] d_r;
     reg [9:0] x;          // 0..639
     reg [8:0] y;          // 0..479
@@ -37,31 +34,18 @@ module cam_capture #(
     // PCLK ドメインにはリセットが無いので、FPGA の初期値で起動する
     initial begin
         we = 1'b0; waddr = 0; wdata = 0; sof = 1'b0; frame_toggle = 1'b0;
-        vsync_r = 0; vsync_r2 = 0; href_r = 0; href_r2 = 0; d_r = 0;
+        vsync_r = 0; vsync_r2 = 0; href_r = 0; d_r = 0;
         x = 0; y = 0; phase = 0; hi = 0; first = 1'b1;
     end
 
-    localparam    LINE_PAD = (DECIMATE == 0);    // Phase 2 だけ、短いラインを埋める
-    wire          in_frame = (x < 10'd640) && (y < 9'd480);
-    wire          take;
-    wire [AW-1:0] addr;
-
-    // 書き込みアドレス (定数乗算はシフト加算で書く)
-    generate
-        if (DECIMATE) begin : g_dec
-            wire [14:0] a = {y[8:2], 7'b0} + {2'b0, y[8:2], 5'b0} + {7'b0, x[9:2]}; // (y/4)*160 + x/4
-            assign addr = a[AW-1:0];
-            assign take = (x[1:0] == 2'd0) && (y[1:0] == 2'd0) && in_frame;
-        end else begin : g_full
-            wire [18:0] a = {y, 9'b0} + {2'b0, y, 7'b0} + {9'b0, x};                // y*640 + x
-            assign addr = a[AW-1:0];
-            assign take = in_frame;
-        end
-    endgenerate
+    wire          take = (x < 10'd640) && (y < 9'd480);
+    // 書き込みアドレス y*640 + x (定数乗算はシフト加算で書く)
+    wire [18:0]   addr_f = {y, 9'b0} + {2'b0, y, 7'b0} + {9'b0, x};
+    wire [AW-1:0] addr   = addr_f[AW-1:0];
 
     always @(posedge pclk) if (ce) begin
         vsync_r <= vsync; vsync_r2 <= vsync_r;
-        href_r  <= href;  href_r2  <= href_r;
+        href_r  <= href;
         d_r     <= d;
         we      <= 1'b0;
         sof     <= 1'b0;
@@ -85,7 +69,7 @@ module cam_capture #(
                     waddr <= addr;
                 end
             end
-        end else if (LINE_PAD && x != 10'd0 && x < 10'd640 && y < 9'd480) begin
+        end else if (x != 10'd0 && x < 10'd640 && y < 9'd480) begin
             // HREF が終わったのに 640 画素に足りない (PCLK の取りこぼし): 残りを 0 で埋めて
             // 1 ラインの画素数をそろえる。取りこぼしの影響がそのラインだけで済み、
             // フレームの総画素数がずれて丸ごと捨てられるのを防ぐ (ライン間の空白で行う)
@@ -99,7 +83,7 @@ module cam_capture #(
         end else begin
             phase <= 1'b0;
             x     <= 0;
-            if (LINE_PAD ? (x != 10'd0) : href_r2) y <= y + 1'b1;    // ライン終了で次のライン
+            if (x != 10'd0) y <= y + 1'b1;    // ライン終了で次のライン
         end
     end
 endmodule
